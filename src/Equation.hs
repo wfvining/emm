@@ -103,8 +103,8 @@ makeEquation numInputs depth = do
 grow :: Int -> Int -> Rand (Equation Double)
 grow numInputs 0 = getTerminal numInputs
 grow numInputs depth = do
-  terminal <- getBool
-  if terminal
+  terminal <- getDouble
+  if terminal < 0.429 -- 3/7 chance of choosing a terminal
   then getTerminal numInputs
   else do -- Pretty sure there is cleaner way to do this.
     left <- grow numInputs (depth - 1)

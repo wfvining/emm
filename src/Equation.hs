@@ -6,8 +6,9 @@ module Equation
     ) where
 
 import qualified Data.Vector.Generic as V
-import Control.Monad.Mersenne.Random
-import Control.Monad (liftM)
+import qualified Data.Vector as VB
+import Control.Monad.Mersenne.Random hiding (R)
+import Control.Monad (liftM, liftM2)
 
 data Equation a = Plus  (Equation a) (Equation a)
                 | Times (Equation a) (Equation a)
@@ -35,6 +36,43 @@ instance (Eq a) => Eq (Equation a) where
     (Input a)     == (Input b)     = a == b
     (Var   a)     == (Var   b)     = a == b
     _             == _             = False
+
+data EqCtx a = Top
+             | L (EqCtx a) (Equation a) (Equation a -> Equation a -> Equation a)
+             | R (EqCtx a) (Equation a) (Equation a -> Equation a -> Equation a)
+
+type EqZipper a = (Equation a, EqCtx a)
+
+left :: EqZipper a -> EqZipper a
+left (Plus x y, ctx)  = (x, (L ctx y Plus))
+left (Times x y, ctx) = (x, (L ctx y Times))
+left (Minus x y, ctx) = (x, (L ctx y Minus))
+left (Div x y, ctx)   = (x, (L ctx y Div))
+
+right :: EqZipper a -> EqZipper a
+right (Plus x y, ctx)  = (x, (R ctx y Plus))
+right (Times x y, ctx) = (x, (R ctx y Times))
+right (Minus x y, ctx) = (x, (R ctx y Minus))
+right (Div x y, ctx)   = (x, (R ctx y Div))
+
+up :: EqZipper a -> EqZipper a
+up (x, L ctx y f) = (f x y, ctx)
+
+upmost :: EqZipper a -> EqZipper a
+upmost z@(x, Top) = z
+upmost z          = upmost $ up z
+
+makeZipper :: Equation a -> EqZipper a
+makeZipper eq = (eq, Top)
+
+isTerminal :: Equation a -> Bool
+isTerminal (Var _)   = True
+isTerminal (Input _) = True
+isTerminal (Const _) = True
+isTerminal _         = False
+
+isNonTerminal :: Equation a -> Bool
+isNonTerminal = not . isTerminal
 
 evaluateEquation :: (V.Vector v a, Fractional a) => v a -> v a -> Equation a -> a
 evaluateEquation _ _ (Const x)          = x
@@ -76,13 +114,16 @@ reduceEquation' x@(Minus a b)
     | otherwise = x
 reduceEquation' x = x
 
-getTerminal :: Int -> Rand (Equation Double)
-getTerminal numInputs = do
+getTerminal :: Int -> Int -> Rand (Equation Double)
+getTerminal numInputs numVars = do
   constant <- getBool
   if constant then
       fmap Const $ fmap (* 1000) $ getDouble
-  else
-      fmap Input $ fmap (`mod` numInputs) getInt
+  else do
+    x <- fmap (`mod` (numInputs+numVars)) getInt
+    if x < numInputs
+    then return $ Input x
+    else return $ Var (x - numInputs)
 
 getNonTerminal :: Rand (Equation a -> Equation a -> Equation a)
 getNonTerminal = do
@@ -94,29 +135,75 @@ getNonTerminal = do
              3 -> Div
 
 -- Generate a new equation using the ramped half and half method (sort-of)
-makeEquation :: Int -> Int -> Rand (Equation Double)
-makeEquation numInputs depth = do
+makeEquation :: Int -> Int -> Int -> Rand (Equation Double)
+makeEquation numInputs numVars depth = do
   g <- getBool
-  if g then grow numInputs depth else full numInputs depth
+  if g then grow numInputs numVars depth else full numInputs numVars depth
 
 -- TODO: Abstract this pattern
-grow :: Int -> Int -> Rand (Equation Double)
-grow numInputs 0 = getTerminal numInputs
-grow numInputs depth = do
+grow :: Int -> Int -> Int -> Rand (Equation Double)
+grow numInputs numVars 0 = getTerminal numInputs numVars
+grow numInputs numVars depth = do
   terminal <- getDouble
   if terminal < 0.429 -- 3/7 chance of choosing a terminal
-  then getTerminal numInputs
+  then getTerminal numInputs numVars
   else do -- Pretty sure there is cleaner way to do this.
-    left <- grow numInputs (depth - 1)
-    right <- grow numInputs (depth - 1)
+    left <- grow numInputs numVars (depth - 1)
+    right <- grow numInputs numVars (depth - 1)
     nt <- getNonTerminal
     return $ nt left right
 
-full :: Int -> Int -> Rand (Equation Double)
-full numInputs 0     = getTerminal numInputs
-full numInputs depth = do
-  left  <- full numInputs (depth - 1)
-  right <- full numInputs (depth - 1)
+full :: Int -> Int -> Int -> Rand (Equation Double)
+full numInputs numVars 0     = getTerminal numInputs numVars
+full numInputs numVars depth = do
+  left  <- full numInputs numVars (depth - 1)
+  right <- full numInputs numVars (depth - 1)
   nt <- getNonTerminal
   return $ nt left right
 
+recombine :: Equation a -> VB.Vector (Equation a) -> Rand (Equation a)
+recombine eq eqs = do
+  e <- fmap (`mod` VB.length eqs) getInt
+  let selectedEquation = eqs VB.! e
+  merge eq selectedEquation
+
+-- select a node in the equation. there is a 10% chance of selecting a terminal node.
+selectNode :: Equation a -> Rand (EqZipper a)
+selectNode eq = do
+  terminal <- fmap (< 0.1) getDouble
+  if terminal then selectTerminalNode eq else selectNonTerminalNode eq
+
+selectTerminalNode :: Equation a -> Rand (EqZipper a)
+selectTerminalNode = (liftM snd) . selectTerminalNode' . makeZipper
+  where selectTerminalNode' :: (EqZipper a) -> Rand (Double, EqZipper a)
+        selectTerminalNode' eqz@(eq, ctx) =
+          if isTerminal eq
+          then do
+            p <- getDouble
+            return (p, eqz)
+          else do
+            -- look left, look right, return max
+            l <- selectTerminalNode' (left eqz)
+            r <- selectTerminalNode' (right eqz)
+            if (fst l) > (fst r) then return l else return r
+
+selectNonTerminalNode :: Equation a -> Rand (EqZipper a)
+selectNonTerminalNode = (liftM snd) . selectNonTerminalNode' . makeZipper
+  where selectNonTerminalNode' :: EqZipper a -> Rand (Double, EqZipper a)
+        selectNonTerminalNode' eqz@(eq, ctx) =
+          if isNonTerminal eq
+          then do
+            p <- getDouble
+            l <- selectNonTerminalNode' (left eqz)
+            r <- selectNonTerminalNode' (right eqz)
+            if p > (fst l) && p > (fst r) then return (p, eqz)
+              else if (fst l) > (fst r) then return l else return r
+          else return (-1.0, eqz)
+
+-- select a random subtree from eq2 and graft it over a random subtree
+-- in eq1.
+merge :: Equation a -> Equation a -> Rand (Equation a)
+merge eq1 eq2 = liftM2 graft (selectNode eq1) (selectNode eq2)
+
+graft :: EqZipper a -> EqZipper a -> Equation a
+graft (eq, _) (_, ctx) = fst . upmost $ (eq, ctx)

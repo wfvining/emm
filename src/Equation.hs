@@ -3,10 +3,10 @@ module Equation
     , reduceEquation
     , evaluateEquation
     , makeEquation
+    ,
     ) where
 
 import qualified Data.Vector.Generic as V
-import qualified Data.Vector as VB
 import Control.Monad.Mersenne.Random hiding (R)
 import Control.Monad (liftM, liftM2)
 
@@ -161,12 +161,6 @@ full numInputs numVars depth = do
   nt <- getNonTerminal
   return $ nt left right
 
-recombine :: Equation a -> VB.Vector (Equation a) -> Rand (Equation a)
-recombine eq eqs = do
-  e <- fmap (`mod` VB.length eqs) getInt
-  let selectedEquation = eqs VB.! e
-  merge eq selectedEquation
-
 -- select a node in the equation. there is a 10% chance of selecting a terminal node.
 selectNode :: Equation a -> Rand (EqZipper a)
 selectNode eq = do
@@ -202,8 +196,8 @@ selectNonTerminalNode = (liftM snd) . selectNonTerminalNode' . makeZipper
 
 -- select a random subtree from eq2 and graft it over a random subtree
 -- in eq1.
-merge :: Equation a -> Equation a -> Rand (Equation a)
-merge eq1 eq2 = liftM2 graft (selectNode eq1) (selectNode eq2)
+recombine :: Equation a -> Equation a -> Rand (Equation a)
+recombine eq1 eq2 = liftM2 graft (selectNode eq1) (selectNode eq2)
 
 graft :: EqZipper a -> EqZipper a -> Equation a
 graft (eq, _) (_, ctx) = fst . upmost $ (eq, ctx)

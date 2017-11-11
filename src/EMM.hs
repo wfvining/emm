@@ -2,6 +2,7 @@ module EMM
   ( Model(..)
   , evaluateModel
   , setInput
+  , recombine
   ) where
 
 import Equation
@@ -51,6 +52,10 @@ makeModel numInputs numOutputs = do
                  , state = V.fromList []
                  , equations = eqs
                  , output = initialOutput }
+
+selectEquation :: V.Vector (Equation a) -> Rand (Equation a)
+selectEquation eqs =
+  liftM (eqs V.!) $ fmap (`mod` V.length eqs) getInt
 
 recombine :: Double -> Double -> Model -> Model -> Rand Model
 recombine pTreeLevel pTree m1 m2 = undefined

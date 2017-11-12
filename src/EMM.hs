@@ -2,7 +2,7 @@ module EMM
   ( Model(..)
   , evaluateModel
   , setInput
-  , recombine
+  , EMM.recombine
   ) where
 
 import Equation
@@ -53,10 +53,30 @@ makeModel numInputs numOutputs = do
                  , equations = eqs
                  , output = initialOutput }
 
-selectEquation :: V.Vector (Equation a) -> Rand (Equation a)
-selectEquation eqs =
-  liftM (eqs V.!) $ fmap (`mod` V.length eqs) getInt
+--selectEquation :: V.Vector (Equation a) -> Rand (Equation a)
+--selectEquation eqs =
+--  liftM (eqs V.!) $ fmap (`mod` V.length eqs) getInt
+
+selectEquation :: Model -> Rand (Equation Double)
+selectEquation m = do
+  let numEquations = V.length . equations $ m
+  let numState = V.length . state $ m
+  i <- fmap (`mod` (numEquations + numState)) getInt
+  if i >= numEquations
+  then return $ (state m) V.! (i - numEquations)
+  else return $ (equations m) V.! i
 
 recombine :: Double -> Double -> Model -> Model -> Rand Model
-recombine pTreeLevel pTree m1 m2 = undefined
-  
+recombine pTreeLevel pTree m1 m2 = do
+  -- combine the vectors for state and equations from m1 into a single vector
+  -- for each vector recombine it with a random equation from m2 with probability pTree
+  let allTrees = (equations m1) V.++ (state m1)
+  (equations', state') <- fmap (V.splitAt . V.length . equations $ m1) $ mapM doRecombine allTrees
+  return $ m1 { equations = equations', state = state' }
+  where doRecombine eq1 = do
+          p <- getDouble
+          if p < pTree
+          then do
+            eq <- selectEquation m2
+            Equation.recombine eq1 eq
+          else return eq1

@@ -3,7 +3,7 @@ module Equation
     , reduceEquation
     , evaluateEquation
     , makeEquation
-    ,
+    , recombine
     ) where
 
 import qualified Data.Vector.Generic as V
